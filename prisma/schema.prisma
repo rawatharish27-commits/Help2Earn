@@ -1,9 +1,6 @@
 // This is your Prisma schema file,
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,20 +10,234 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// User model - phone is the unique identifier
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String    @id @default(cuid())
+  phone         String    @unique
+  name          String?
+  ageVerified   Boolean   @default(false) // 18+ verification
+  paymentActive Boolean   @default(false)
+  activeTill    DateTime?
+  trustScore    Int       @default(50)
+  latitude      Float?
+  longitude     Float?
+  locationText  String?   // Human readable location
+  isAdmin       Boolean   @default(false)
+  isFrozen      Boolean   @default(false) // Account freeze status
+  referralCode  String?   @unique
+  referredBy    String?   // Referral code of user who referred
+  referralCount Int       @default(0)
+  // Notification preferences
+  notifyNewRequests Boolean @default(true)
+  notifyPayments    Boolean @default(true)
+  notifyReports     Boolean @default(true)
+  // Stats
+  totalHelpsGiven   Int @default(0)
+  totalHelpsTaken   Int @default(0)
+  // Timestamps
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  lastActiveAt  DateTime? @default(now())
+
+  payments    Payment[]
+  problems    Problem[]
+  reports     Report[]   @relation("Reporter")
+  reportsAgainst Report[] @relation("Reported")
+  givenFeedbacks  Feedback[] @relation("Helper")
+  receivedFeedbacks Feedback[] @relation("Client")
+  noShows     NoShow[]
+  notifications Notification[]
+  activityLogs ActivityLog[]
+
+  @@map("users")
 }
 
-model Post {
+// Payment model - subscription payments
+model Payment {
+  id        String        @id @default(cuid())
+  userId    String
+  amount    Float         @default(49)
+  status    PaymentStatus @default(PENDING)
+  month     Int           // 1-12
+  year      Int           // 2024, 2025 etc
+  utiRef    String?       // UPI transaction reference
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+// Problem/Request model
+model Problem {
+  id              String        @id @default(cuid())
+  userId          String
+  type            ProblemType   @default(EMERGENCY)
+  riskLevel       RiskLevel     @default(LOW)
+  category        String?       // Sub-category like "puncture", "tools", etc.
+  title           String
+  description     String
+  offerPrice      Float?
+  latitude        Float?
+  longitude       Float?
+  locationText    String?
+  minTrustRequired Int          @default(40)
+  status          ProblemStatus @default(OPEN)
+  viewCount       Int           @default(0)
+  callCount       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  expiresAt       DateTime?
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  feedbacks Feedback[]
+
+  @@index([status, expiresAt])
+  @@map("problems")
+}
+
+// Report model - for reporting users
+model Report {
+  id          String      @id @default(cuid())
+  reporterId  String
+  reportedId  String
+  problemId   String?
+  reason      String
+  category    ReportCategory
+  status      ReportStatus @default(PENDING)
+  adminNotes  String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  reporter User  @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  reported User  @relation("Reported", fields: [reportedId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+// Feedback model - after help completion
+model Feedback {
+  id          String  @id @default(cuid())
+  problemId   String
+  helperId    String
+  clientId    String
+  rating      Int     // 1-5
+  comment     String?
+  helperReached Boolean?
+  createdAt   DateTime @default(now())
+
+  problem Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  helper  User    @relation("Helper", fields: [helperId], references: [id], onDelete: Cascade)
+  client  User    @relation("Client", fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@map("feedbacks")
+}
+
+// NoShow model - track no-shows
+model NoShow {
+  id          String   @id @default(cuid())
+  userId      String
+  problemId   String
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("no_shows")
+}
+
+// OTP model - for login verification
+model OTP {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  phone     String
+  code      String
+  expiresAt DateTime
+  used      Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  @@map("otps")
+}
+
+// Notification model
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String   // "PAYMENT", "PROBLEM", "REPORT", "SYSTEM"
+  title     String
+  message   String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+  @@map("notifications")
+}
+
+// Activity Log model - for admin tracking
+model ActivityLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  details   String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("activity_logs")
+}
+
+// Admin settings
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
   updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// Enums
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ProblemType {
+  EMERGENCY
+  TIME_ACCESS
+  RESOURCE_RENT
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ProblemStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+  EXPIRED
+  CANCELLED
+}
+
+enum ReportCategory {
+  NO_SHOW
+  MISBEHAVIOR
+  FRAUD
+  SAFETY
+  SPAM
+  FAKE_LOCATION
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWED
+  RESOLVED
+  DISMISSED
 }
